@@ -36,13 +36,54 @@ def get():
 	return Response(hub_challenge, status=200)
 
 def post():
-	"""Post."""
+	"""Meta posts events here. Only signed posts are accepted; the work runs in a background job so Meta gets its
+	200 at once (Meta retries slow or failed deliveries)."""
+	if not signature_ok():
+		return Response("Invalid signature", status=401)
 	data = frappe.local.form_dict
 	frappe.get_doc({
 		"doctype": "WhatsApp Notification Log",
 		"template": "Webhook",
 		"meta_data": json.dumps(data)
 	}).insert(ignore_permissions=True)
+	if frappe.flags.in_test:
+		return process(data)
+	frappe.enqueue("frappe_whatsapp.utils.webhook.process", queue="short", data=dict(data), enqueue_after_commit=True)
+	return Response("ok", status=200)
+
+
+def signature_ok() -> bool:
+	"""X-Hub-Signature-256 = sha256 HMAC of the raw body with the Meta app secret of one of the WhatsApp Accounts.
+	Without it anyone could post fake incoming messages (and, with CRM, create leads)."""
+	import hashlib
+	import hmac
+
+	if frappe.flags.in_test and not frappe.flags.whatsapp_check_signature:
+		return True
+	header = (frappe.get_request_header("X-Hub-Signature-256") or "").strip()
+	secrets = [
+		frappe.get_doc("WhatsApp Account", name).get_password("app_secret", raise_exception=False)
+		for name in frappe.get_all("WhatsApp Account", filters={"app_secret": ("is", "set")}, pluck="name")
+	]
+	secrets = [s for s in secrets if s]
+	if not secrets:
+		if frappe.conf.get("whatsapp_allow_unsigned_webhook"):
+			return True
+		frappe.log_error(title="WhatsApp webhook refused: no App Secret on any WhatsApp Account")
+		return False
+	if not header.startswith("sha256="):
+		return False
+	body = frappe.request.get_data(cache=True) or b""
+	for secret in secrets:
+		expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+		if hmac.compare_digest(expected, header[len("sha256="):]):
+			return True
+	return False
+
+
+def process(data):
+	"""Store the messages and status updates of one webhook post."""
+	frappe.set_user("Administrator")
 
 	messages = []
 	phone_id = None
