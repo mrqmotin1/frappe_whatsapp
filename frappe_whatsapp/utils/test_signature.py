@@ -5,7 +5,10 @@ import hmac
 import json
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+try:  # v16: test records load lazily
+	from frappe.tests import IntegrationTestCase as TestCase
+except ImportError:  # v14/v15
+	from frappe.tests.utils import FrappeTestCase as TestCase
 from werkzeug.test import EnvironBuilder
 from werkzeug.wrappers import Request
 
@@ -14,7 +17,7 @@ from frappe_whatsapp.utils.webhook import signature_ok
 SECRET = "test-app-secret-123"
 
 
-class TestWebhookSignature(FrappeTestCase):
+class TestWebhookSignature(TestCase):
 	def setUp(self):
 		frappe.flags.whatsapp_check_signature = True
 		self.account = frappe.get_doc(
