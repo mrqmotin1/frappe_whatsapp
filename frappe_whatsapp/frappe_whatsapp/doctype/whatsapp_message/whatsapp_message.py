@@ -211,7 +211,7 @@ class WhatsAppMessage(Document):
         parameters = []
         template_parameters = []
         if template.sample_values:
-            field_names = template.field_names.split(",") if template.field_names else template.sample_values.split(",")
+            field_names = template.field_names.split(",") if template.field_names else template.get_sample_values()
 
             if self.body_param is not None:
                 params = list(json.loads(self.body_param).values())
@@ -312,6 +312,11 @@ class WhatsAppMessage(Document):
             # "sub_type must be one of {...}" errors since Meta no longer
             # accepts `phone_number`. See issue #188.
             button_parameters = []
+            # Explicit URL suffixes, one per dynamic URL button in template order (e.g. a Meet code, a pay token)
+            url_params = self.button_params or []
+            if isinstance(url_params, str):
+                url_params = json.loads(url_params or "[]")
+            url_params = list(url_params)
             for idx, btn in enumerate(template.buttons):
                 # Shift index if MPM was added at index 0
                 current_idx = str(idx + 1) if has_mpm else str(idx)
@@ -324,8 +329,11 @@ class WhatsAppMessage(Document):
                         "parameters": [{"type": "payload", "payload": btn.button_label}]
                     })
                 elif btn.button_type == "Visit Website" and btn.url_type == "Dynamic":
-                    ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
-                    url = ref_doc.get_formatted(btn.website_url)
+                    if url_params:
+                        url = str(url_params.pop(0))
+                    else:
+                        ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
+                        url = ref_doc.get_formatted(btn.website_url)
                     button_parameters.append({
                         "type": "button",
                         "sub_type": "url",

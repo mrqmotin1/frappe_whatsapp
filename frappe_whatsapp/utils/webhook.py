@@ -289,6 +289,7 @@ def process(data):
 					"type": "Incoming",
 					"from": message['from'],
 					"message": message['button']['text'],
+					"button_payload": message['button'].get('payload'),
 					"message_id": message['id'],
 					"reply_to_message_id": reply_to_message_id,
 					"is_reply": is_reply,
@@ -326,13 +327,19 @@ def update_status(data):
 		update_message_status(data['value'])
 
 def update_template_status(data):
-	"""Update template status."""
-	frappe.db.sql(
-		"""UPDATE `tabWhatsApp Templates`
-		SET status = %(event)s
-		WHERE id = %(message_template_id)s""",
-		data
-	)
+	"""Store a template's review result and Meta's reason, then call the `whatsapp_template_status_update` hooks."""
+	reason = data.get("reason")
+	if not reason or reason == "NONE":
+		reason = (data.get("other_info") or {}).get("description") or ""
+	for name in frappe.get_all(
+		"WhatsApp Templates", filters={"id": str(data.get("message_template_id"))}, pluck="name"
+	):
+		# set_value, not save: saving would post the template to Meta again
+		frappe.db.set_value(
+			"WhatsApp Templates", name, {"status": data.get("event"), "status_reason": reason}
+		)
+		for method in frappe.get_hooks("whatsapp_template_status_update"):
+			frappe.get_attr(method)(name, data)
 
 def update_message_status(data):
 	"""Update message status."""

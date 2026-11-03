@@ -407,3 +407,57 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertNotIn("phone_number", sub_types)
         self.assertNotIn("url", sub_types)  # static URL button also excluded
         self.assertIn("quick_reply", sub_types)
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    def test_send_template_dynamic_url_from_button_params(self, mock_post):
+        """button_params supplies the suffix of a dynamic URL button; body_param fills the body in order."""
+        mock_post.return_value = {"messages": [{"id": "wamid.test_url_param"}]}
+
+        template_name = "test_msg_url_template-en"
+        if not frappe.db.exists("WhatsApp Templates", template_name):
+            tmpl = frappe.get_doc({
+                "doctype": "WhatsApp Templates",
+                "template_name": "test_msg_url_template",
+                "actual_name": "test_msg_url_template",
+                "template": "Hello {{1}}, your demo is {{2}}.",
+                "sample_values": '["Rakib", "Thursday, 12 November, 4 pm"]',
+                "category": "UTILITY",
+                "language": frappe.db.get_value("Language", {"language_code": "en"}) or "en",
+                "language_code": "en",
+                "whatsapp_account": "Test WA Msg Account",
+                "status": "APPROVED",
+                "id": "test_template_url_id",
+                "name": template_name,
+            })
+            tmpl.flags.ignore_validate = True
+            tmpl.db_insert()
+            frappe.get_doc({
+                "doctype": "WhatsApp Button",
+                "parent": template_name,
+                "parenttype": "WhatsApp Templates",
+                "parentfield": "buttons",
+                "idx": 1,
+                "button_type": "Visit Website",
+                "button_label": "Join the demo",
+                "website_url": "https://meet.google.com/{{1}}",
+                "url_type": "Dynamic",
+            }).db_insert()
+            frappe.db.commit()  # nosemgrep: frappe-manual-commit -- test fixture must be visible to later queries
+
+        frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": "919900112265",
+            "message_type": "Template",
+            "content_type": "text",
+            "template": template_name,
+            "body_param": json.dumps({"1": "Rakib", "2": "Thursday, 12 November, 4 pm"}),
+            "button_params": json.dumps(["abc-defg-hij"]),
+            "whatsapp_account": "Test WA Msg Account",
+        }).insert(ignore_permissions=True)
+
+        components = json.loads(mock_post.call_args.kwargs["data"])["template"]["components"]
+        body = next(c for c in components if c["type"] == "body")
+        self.assertEqual([p["text"] for p in body["parameters"]], ["Rakib", "Thursday, 12 November, 4 pm"])
+        url = next(c for c in components if c.get("sub_type") == "url")
+        self.assertEqual(url["parameters"], [{"type": "text", "text": "abc-defg-hij"}])

@@ -26,6 +26,7 @@
   "attach",
   "buttons",
   "body_param",
+  "button_params",
   "whatsapp_account",
   "section_break_flow",
   "flow",
@@ -38,6 +39,7 @@
   "section_break_iyjf",
   "is_reply",
   "reply_to_message_id",
+  "button_payload",
   "section_break_dhba",
   "reference_doctype",
   "bulk_message_reference",
@@ -276,11 +278,24 @@
    "fieldtype": "JSON",
    "label": "Product Catalog",
    "set_only_once": 1
+  },
+  {
+   "fieldname": "button_params",
+   "fieldtype": "JSON",
+   "label": "Button Params",
+   "description": "JSON list of URL suffixes, one per dynamic URL button in template order, e.g. [\"abc-defg-hij\"]"
+  },
+  {
+   "fieldname": "button_payload",
+   "fieldtype": "Data",
+   "label": "Button Payload",
+   "read_only": 1,
+   "description": "Payload of the template quick-reply button the customer tapped"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-11 00:34:02.455955",
+ "modified": "2026-11-03 22:03:33.054865",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Message",

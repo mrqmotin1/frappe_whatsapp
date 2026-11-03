@@ -296,3 +296,44 @@ class TestWhatsAppTemplates(IntegrationTestCase):
 
         doc.reload()
         self.assertEqual(doc.template, "Updated body text")
+
+    def test_sample_values_json_and_comma(self):
+        """Samples may be a JSON list (commas inside values) or the older comma-separated text."""
+        doc = self._make_template_without_hooks(
+            template_name="test_tmpl_samples", sample_values='["Rakib", "Thursday, 12 November, 4 pm"]'
+        )
+        self.assertEqual(doc.get_sample_values(), ["Rakib", "Thursday, 12 November, 4 pm"])
+        doc.sample_values = "John,ORD-001"
+        self.assertEqual(doc.get_sample_values(), ["John", "ORD-001"])
+        doc.sample_values = ""
+        self.assertEqual(doc.get_sample_values(), [])
+
+    def test_two_languages_share_one_name(self):
+        """One Meta template name, one record per language."""
+        bn = frappe.db.get_value("Language", {"language_code": "bn"}) or "bn"
+        en = self._make_template_without_hooks(template_name="test_tmpl_bilingual")
+        other = self._make_template_without_hooks(
+            template_name="test_tmpl_bilingual", language=bn, language_code="bn", id="tmpl_id_bilingual_bn"
+        )
+        self.assertEqual((en.name, other.name), ("test_tmpl_bilingual-en", "test_tmpl_bilingual-bn"))
+        self.assertEqual(en.actual_name, other.actual_name)
+
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
+    def test_insert_keeps_actual_name_and_sends_json_samples(self, mock_post):
+        """after_insert keeps a set actual_name and submits the JSON samples as given."""
+        mock_post.return_value = {"id": "tmpl_meta_id", "status": "PENDING"}
+        doc = frappe.get_doc({
+            "doctype": "WhatsApp Templates",
+            "template_name": "test_tmpl_keep_name",
+            "actual_name": "demo_tomorrow",
+            "template": "Hello {{1}}, your demo is tomorrow at {{2}}.",
+            "sample_values": '["Rakib", "4 pm"]',
+            "category": "UTILITY",
+            "language": frappe.db.get_value("Language", {"language_code": "en"}) or "en",
+            "whatsapp_account": "Test WA Tmpl Account",
+        })
+        doc.insert(ignore_permissions=True)
+        sent = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertEqual(sent["name"], "demo_tomorrow")
+        self.assertEqual(sent["components"][0]["example"]["body_text"], [["Rakib", "4 pm"]])
+        self.assertEqual(frappe.db.get_value("WhatsApp Templates", doc.name, "status"), "PENDING")

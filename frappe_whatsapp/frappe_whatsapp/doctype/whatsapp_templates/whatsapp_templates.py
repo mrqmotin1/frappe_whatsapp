@@ -28,6 +28,16 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
         if not self.is_new():
             self.update_template()
 
+    def get_sample_values(self):
+        """Body samples, in placeholder order: a JSON list (values may contain commas) or the older comma-separated text."""
+        raw = (self.sample_values or "").strip()
+        if raw.startswith("["):
+            try:
+                return [str(v) for v in json.loads(raw)]
+            except ValueError:
+                pass
+        return raw.split(",") if raw else []
+
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
         if not self.whatsapp_account:
@@ -123,7 +133,8 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
     def after_insert(self):  # nosemgrep: frappe-modifying-but-not-committing -- self.actual_name/id/status are persisted via self.db_update() after the Meta round-trip; the static check can't trace through the API call
         # actual_name / id / status are persisted via self.db_update() below
         # after the Meta round-trip; the static check can't trace that call.
-        if self.template_name:
+        # A set actual_name is kept, so one Meta template name can carry several languages (one record each)
+        if self.template_name and not self.actual_name:
             self.actual_name = self.template_name.lower().replace(" ", "_")  # nosemgrep: frappe-modifying-but-not-committing
 
         self.get_settings()
@@ -139,7 +150,7 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
             "text": self.template,
         }
         if self.sample_values:
-            body.update({"example": {"body_text": [self.sample_values.split(",")]}})
+            body.update({"example": {"body_text": [self.get_sample_values()]}})
 
         data["components"].append(body)
         if self.header_type:
@@ -201,7 +212,7 @@ class WhatsAppTemplates(Document):  # nosemgrep: frappe-modifying-but-not-commit
             "text": self.template,
         }
         if self.sample_values:
-            body.update({"example": {"body_text": [self.sample_values.split(",")]}})
+            body.update({"example": {"body_text": [self.get_sample_values()]}})
         data["components"].append(body)
         if self.header_type:
             data["components"].append(self.get_header())
@@ -315,25 +326,26 @@ def fetch():
         headers = {"authorization": f"Bearer {token}", "content-type": "application/json"}
 
         try:
-            response = make_request(
-                "GET",
-                f"{url}/{version}/{business_id}/message_templates",
-                headers=headers,
-            )
+          next_url = f"{url}/{version}/{business_id}/message_templates?limit=100"
+          while next_url:
+            response = make_request("GET", next_url, headers=headers)
+            next_url = response.get("paging", {}).get("next")
 
             for template in response["data"]:
-                # set flag to insert or update
-                flags = 1
-                if frappe.db.exists("WhatsApp Templates", {"actual_name": template["name"]}):
-                    doc = frappe.get_doc("WhatsApp Templates", {"actual_name": template["name"]})
+                # one record per Meta name + language
+                key = {"actual_name": template["name"], "language_code": template["language"]}
+                if frappe.db.exists("WhatsApp Templates", key):
+                    doc = frappe.get_doc("WhatsApp Templates", key)
                 else:
-                    flags = 0
                     doc = frappe.new_doc("WhatsApp Templates")
                     doc.template_name = template["name"]
                     doc.actual_name = template["name"]
 
                 doc.status = template["status"]
                 doc.language_code = template["language"]
+                language = template["language"].replace("_", "-")
+                if not doc.language and frappe.db.exists("Language", language):
+                    doc.language = language
                 doc.category = template["category"]
                 doc.id = template["id"]
                 doc.whatsapp_account = account.name
@@ -358,9 +370,9 @@ def fetch():
                         if component.get("example"):
     			            # Check if 'body_text' exists before trying to access it
                             if component["example"].get("body_text"):
-                                doc.sample_values = ",".join(
-            	                    component["example"]["body_text"][0]
-                    	        )
+                                doc.sample_values = json.dumps(
+                                    component["example"]["body_text"][0], ensure_ascii=False
+                                )
 
                     # Update buttons
                     elif component["type"] == "BUTTONS":
@@ -404,7 +416,7 @@ def fetch():
 
                 upsert_doc_without_hooks(doc, "WhatsApp Button", "buttons")
 
-            return "Successfully fetched templates from meta"
+          return "Successfully fetched templates from meta"
 
         except Exception as e:
             # Check if frappe.flags.integration_request is set and has a .json() method
