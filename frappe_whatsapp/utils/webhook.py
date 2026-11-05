@@ -1,6 +1,7 @@
 """Webhook."""
 import frappe
 import json
+import mimetypes
 import requests
 import time
 from frappe import _
@@ -115,6 +116,8 @@ def process(data):
 
 	if messages:
 		for message in messages:
+			if frappe.db.exists("WhatsApp Message", {"message_id": message.get("id")}):
+				continue  # Meta re-delivers a webhook it thinks failed: store each message once
 			message_type = message['type']
 			is_reply = True if message.get('context') and 'forwarded' not in message.get('context') else False
 			reply_to_message_id = message['context']['id'] if is_reply else None
@@ -247,14 +250,21 @@ def process(data):
 				if response.status_code == 200:
 					media_data = response.json()
 					media_url = media_data.get("url")
-					mime_type = media_data.get("mime_type")
-					file_extension = mime_type.split('/')[1]
+					mime_type = media_data.get("mime_type") or ""
+					file_extension = media_extension(mime_type)
 
 					media_response = requests.get(media_url, headers=headers)
 					if media_response.status_code == 200:
-
-						file_data = media_response.content
-						file_name = f"{frappe.generate_hash(length=10)}.{file_extension}"
+						# The file is saved first (private: customers' photos and voice notes are not public), so the
+						# message is inserted once, with its attachment, and the incoming hooks can use it.
+						file = frappe.get_doc(
+							{
+								"doctype": "File",
+								"file_name": f"{frappe.generate_hash(length=10)}.{file_extension}",
+								"content": media_response.content,
+								"is_private": 1,
+							}
+						).insert(ignore_permissions=True)
 
 						message_doc = frappe.get_doc({
 							"doctype": "WhatsApp Message",
@@ -265,24 +275,12 @@ def process(data):
 							"is_reply": is_reply,
 							"message": message[message_type].get("caption", ""),
 							"content_type" : message_type,
+							"attach": file.file_url,
 							"profile_name":sender_profile_name,
 							"whatsapp_account":whatsapp_account.name
 						}).insert(ignore_permissions=True)
-
-						file = frappe.get_doc(
-							{
-								"doctype": "File",
-								"file_name": file_name,
-								"attached_to_doctype": "WhatsApp Message",
-								"attached_to_name": message_doc.name,
-								"content": file_data,
-								"attached_to_field": "attach"
-							}
-						).save(ignore_permissions=True)
-
-
-						message_doc.attach = file.file_url
-						message_doc.save()
+						frappe.db.set_value("File", file.name, {"attached_to_doctype": "WhatsApp Message",
+							"attached_to_name": message_doc.name, "attached_to_field": "attach"}, update_modified=False)
 			elif message_type == "button":
 				frappe.get_doc({
 					"doctype": "WhatsApp Message",
@@ -317,6 +315,14 @@ def process(data):
 			changes = data["entry"]["changes"][0]
 		update_status(changes)
 	return
+
+def media_extension(mime_type: str) -> str:
+	"""File extension for a media MIME type: "audio/ogg; codecs=opus" -> "ogg", "image/jpeg" -> "jpg"."""
+	base = (mime_type or "").split(";")[0].strip().lower()
+	known = {"audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "image/jpeg": "jpg", "audio/aac": "aac", "audio/amr": "amr"}
+	ext = known.get(base) or (mimetypes.guess_extension(base) or "").lstrip(".")
+	return ext or (base.split("/")[-1] if "/" in base else "bin")
+
 
 def update_status(data):
 	"""Update status hook."""
