@@ -182,3 +182,27 @@ def format_number(number):
         number = number[1 : len(number)]
 
     return number
+
+def mark_read(message: str, typing: bool = False) -> bool:
+    """Mark an incoming WhatsApp Message as read on the customer's phone (blue ticks), and with typing=True also
+    show "typing…" for up to 25 seconds or until the next message is sent. Never raises: returns False on failure."""
+    import requests
+
+    try:
+        doc = frappe.get_doc("WhatsApp Message", message)
+        if doc.type != "Incoming" or not doc.message_id or not doc.whatsapp_account:
+            return False
+        account = frappe.get_doc("WhatsApp Account", doc.whatsapp_account)
+        body = {"messaging_product": "whatsapp", "status": "read", "message_id": doc.message_id}
+        if typing:
+            body["typing_indicator"] = {"type": "text"}
+        r = requests.post(
+            f"{account.url}/{account.version}/{account.phone_id}/messages",
+            json=body,
+            headers={"Authorization": f"Bearer {account.get_password('token')}"},
+            timeout=10,
+        )
+        return r.ok
+    except Exception:
+        frappe.log_error(title="WhatsApp mark_read failed")
+        return False
