@@ -341,15 +341,29 @@ def update_template_status(data):
 		for method in frappe.get_hooks("whatsapp_template_status_update"):
 			frappe.get_attr(method)(name, data)
 
+# Meta's delivery statuses only move forward; "failed" always applies.
+STATUS_RANK = {"sent": 1, "delivered": 2, "read": 3}
+
+
 def update_message_status(data):
-	"""Update message status."""
+	"""Update message status.
+
+	Meta often sends "sent" and "delivered" for one message within milliseconds, and not always in order. The row is
+	locked while it is updated (the second webhook waits for the first and then reads its result, so the save never hits
+	"modified after you opened it"), and a status never goes back (a late "sent" doesn't overwrite "delivered")."""
 	id = data['statuses'][0]['id']
 	status = data['statuses'][0]['status']
 	conversation = data['statuses'][0].get('conversation', {}).get('id')
 	name = frappe.db.get_value("WhatsApp Message", filters={"message_id": id})
+	if not name:
+		return  # a message sent from elsewhere (another app on the number, Meta's own tools)
 
-	doc = frappe.get_doc("WhatsApp Message", name)
-	doc.status = status
+	doc = frappe.get_doc("WhatsApp Message", name, for_update=True)
+	backwards = STATUS_RANK.get(status, 99) <= STATUS_RANK.get(doc.status, 0) and status != "failed"
+	if backwards and (doc.conversation_id or not conversation):
+		return
+	if not backwards:
+		doc.status = status
 	if conversation:
 		doc.conversation_id = conversation
 	doc.save(ignore_permissions=True)
