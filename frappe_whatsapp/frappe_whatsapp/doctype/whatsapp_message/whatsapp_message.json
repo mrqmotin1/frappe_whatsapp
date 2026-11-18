@@ -40,6 +40,7 @@
   "is_reply",
   "reply_to_message_id",
   "button_payload",
+  "referral",
   "section_break_dhba",
   "reference_doctype",
   "bulk_message_reference",
@@ -291,11 +292,19 @@
    "label": "Button Payload",
    "read_only": 1,
    "description": "Payload of the template quick-reply button the customer tapped"
+  },
+  {
+   "depends_on": "referral",
+   "description": "The click-to-WhatsApp ad or post this chat came from (Meta's referral object)",
+   "fieldname": "referral",
+   "fieldtype": "JSON",
+   "label": "Ad Referral",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-03 22:03:33.054865",
+ "modified": "2026-11-19 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Whatsapp",
  "name": "WhatsApp Message",

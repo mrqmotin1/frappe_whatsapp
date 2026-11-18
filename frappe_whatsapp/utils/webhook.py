@@ -121,6 +121,8 @@ def process(data):
 			message_type = message['type']
 			is_reply = True if message.get('context') and 'forwarded' not in message.get('context') else False
 			reply_to_message_id = message['context']['id'] if is_reply else None
+			# a chat started from a click-to-WhatsApp ad or post: Meta adds the ad (source_id, headline, ctwa_clid...)
+			referral = json.dumps(message["referral"]) if message.get("referral") else None
 			if message_type == 'text':
 				frappe.get_doc({
 					"doctype": "WhatsApp Message",
@@ -132,7 +134,8 @@ def process(data):
 					"is_reply": is_reply,
 					"content_type":message_type,
 					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"whatsapp_account": whatsapp_account.name,
+					"referral": referral
 				}).insert(ignore_permissions=True)
 			elif message_type == 'reaction':
 				frappe.get_doc({
@@ -144,7 +147,8 @@ def process(data):
 					"message_id": message['id'],
 					"content_type": "reaction",
 					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"whatsapp_account": whatsapp_account.name,
+					"referral": referral
 				}).insert(ignore_permissions=True)
 			elif message_type == 'interactive':
 				interactive_data = message['interactive']
@@ -162,7 +166,8 @@ def process(data):
 						"is_reply": is_reply,
 						"content_type": "button",
 						"profile_name": sender_profile_name,
-						"whatsapp_account": whatsapp_account.name
+						"whatsapp_account": whatsapp_account.name,
+						"referral": referral
 					}).insert(ignore_permissions=True)
 				# Handle list reply
 				elif interactive_type == 'list_reply':
@@ -176,7 +181,8 @@ def process(data):
 						"is_reply": is_reply,
 						"content_type": "button",
 						"profile_name": sender_profile_name,
-						"whatsapp_account": whatsapp_account.name
+						"whatsapp_account": whatsapp_account.name,
+						"referral": referral
 					}).insert(ignore_permissions=True)
 				# Handle WhatsApp Flows (nfm_reply)
 				elif interactive_type == 'nfm_reply':
@@ -207,7 +213,8 @@ def process(data):
 						"content_type": "flow",
 						"flow_response": json.dumps(flow_response),
 						"profile_name": sender_profile_name,
-						"whatsapp_account": whatsapp_account.name
+						"whatsapp_account": whatsapp_account.name,
+						"referral": referral
 					}).insert(ignore_permissions=True)
 
 					# Publish realtime event for flow response
@@ -234,6 +241,7 @@ def process(data):
 					"content_type": "order",
 					"profile_name": sender_profile_name,
 					"whatsapp_account": whatsapp_account.name,
+					"referral": referral,
 					"product_catalog_json": json.dumps(order_data)
 				}).insert(ignore_permissions=True)
 			elif message_type in ["image", "audio", "video", "document"]:
@@ -277,7 +285,8 @@ def process(data):
 							"content_type" : message_type,
 							"attach": file.file_url,
 							"profile_name":sender_profile_name,
-							"whatsapp_account":whatsapp_account.name
+							"whatsapp_account": whatsapp_account.name,
+							"referral": referral
 						}).insert(ignore_permissions=True)
 						frappe.db.set_value("File", file.name, {"attached_to_doctype": "WhatsApp Message",
 							"attached_to_name": message_doc.name, "attached_to_field": "attach"}, update_modified=False)
@@ -293,7 +302,8 @@ def process(data):
 					"is_reply": is_reply,
 					"content_type": message_type,
 					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"whatsapp_account": whatsapp_account.name,
+					"referral": referral
 				}).insert(ignore_permissions=True)
 			else:
 				frappe.get_doc({
@@ -304,7 +314,8 @@ def process(data):
 					"message": message[message_type].get(message_type),
 					"content_type" : message_type,
 					"profile_name":sender_profile_name,
-					"whatsapp_account":whatsapp_account.name
+					"whatsapp_account": whatsapp_account.name,
+					"referral": referral
 				}).insert(ignore_permissions=True)
 
 	else:
