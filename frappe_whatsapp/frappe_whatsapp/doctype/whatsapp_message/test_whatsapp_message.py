@@ -182,6 +182,57 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(sent_data["image"]["link"], "https://example.com/image.jpg")
         self.assertEqual(sent_data["image"]["caption"], "Image caption")
 
+    @patch("requests.post")
+    @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
+    def test_outgoing_private_file_is_uploaded(self, mock_post, mock_upload):
+        """A file kept on the site (private or public) is uploaded to Meta and sent by media id, not by link."""
+        mock_post.return_value = {"messages": [{"id": "wamid.test_image_2"}]}
+        mock_upload.return_value = MagicMock(status_code=200, json=lambda: {"id": "media_123"})
+        file = frappe.get_doc({
+            "doctype": "File",
+            "file_name": "wa-test-picture.png",
+            "is_private": 1,
+            "content": b"\x89PNG\r\n\x1a\n" + b"0" * 32,
+        }).insert(ignore_permissions=True)
+        self.addCleanup(lambda: frappe.delete_doc("File", file.name, force=True))
+
+        doc = frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": "919900112259",
+            "message": "",
+            "message_type": "Manual",
+            "content_type": "image",
+            "attach": file.file_url,
+            "whatsapp_account": "Test WA Msg Account",
+        })
+        doc.insert(ignore_permissions=True)
+
+        self.assertTrue(file.file_url.startswith("/private/files/"))
+        upload = mock_upload.call_args
+        self.assertTrue(upload.args[0].endswith("/msg_test_phone_id/media"))
+        self.assertEqual(upload.kwargs["data"], {"messaging_product": "whatsapp", "type": "image/png"})
+        sent_data = json.loads(mock_post.call_args.kwargs["data"])
+        self.assertEqual(sent_data["image"], {"id": "media_123"})
+
+        # Meta refusing the upload stops the message with Meta's own reason
+        mock_upload.return_value = MagicMock(status_code=400, json=lambda: {"error": {"message": "Bad media"}})
+        again = frappe.copy_doc(doc)
+        with self.assertRaises(frappe.ValidationError) as failed:
+            again.insert(ignore_permissions=True)
+        self.assertIn("Bad media", str(failed.exception))
+
+        # a picture format WhatsApp doesn't take is refused before any upload
+        webp = frappe.get_doc({
+            "doctype": "File", "file_name": "wa-test-picture.webp", "is_private": 1, "content": b"RIFF0000WEBP",
+        }).insert(ignore_permissions=True)
+        self.addCleanup(lambda: frappe.delete_doc("File", webp.name, force=True))
+        other = frappe.copy_doc(doc)
+        other.attach = webp.file_url
+        with self.assertRaises(frappe.ValidationError):
+            other.insert(ignore_permissions=True)
+        self.assertEqual(mock_upload.call_count, 2)
+
     @patch("frappe_whatsapp.frappe_whatsapp.doctype.whatsapp_message.whatsapp_message.make_post_request")
     def test_outgoing_reaction_message(self, mock_post):
         """Test sending a reaction message."""

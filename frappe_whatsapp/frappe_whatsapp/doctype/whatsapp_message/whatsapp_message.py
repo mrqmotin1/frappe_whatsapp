@@ -73,10 +73,9 @@ class WhatsAppMessage(Document):
             return
 
         if self.message_type != "Template":
-            if self.attach and not self.attach.startswith("http"):
-                link = frappe.utils.get_url() + "/" + self.attach
-            else:
-                link = self.attach
+            media = {}
+            if self.attach and self.content_type in ["document", "image", "video", "audio"]:
+                media = self.media_ref()
 
             data = {
                 "messaging_product": "whatsapp",
@@ -86,10 +85,11 @@ class WhatsAppMessage(Document):
             if self.is_reply and self.reply_to_message_id:
                 data["context"] = {"message_id": self.reply_to_message_id}
             if self.content_type in ["document", "image", "video"]:
-                data[self.content_type.lower()] = {
-                    "link": link,
-                    "caption": self.message,
-                }
+                data[self.content_type.lower()] = dict(media)
+                if self.message:
+                    data[self.content_type.lower()]["caption"] = self.message
+                if self.content_type == "document" and self.attach:
+                    data["document"]["filename"] = self.attach.split("?")[0].rsplit("/", 1)[-1]
             elif self.content_type == "reaction":
                 data["reaction"] = {
                     "message_id": self.reply_to_message_id,
@@ -99,7 +99,7 @@ class WhatsAppMessage(Document):
                 data["text"] = {"preview_url": True, "body": self.message}
 
             elif self.content_type == "audio":
-                data["audio"] = {"link": link}
+                data["audio"] = dict(media)
 
             elif self.content_type == "interactive":
                 # Interactive message (buttons or list)
@@ -242,18 +242,12 @@ class WhatsAppMessage(Document):
 
         if template.header_type:
             if self.attach:
-                if self.attach.startswith("http"):
-                    url = f'{self.attach}'
-                else:
-                    url = f'{frappe.utils.get_url()}{self.attach}'
                 if template.header_type == 'IMAGE':
                     data['template']['components'].append({
                         "type": "header",
                         "parameters": [{
                             "type": "image",
-                            "image": {
-                                "link": url
-                            }
+                            "image": self.media_ref()
                         }]
                     })
 
@@ -263,8 +257,8 @@ class WhatsAppMessage(Document):
                         "parameters": [{
                             "type": "document",
                             "document": {
-                                "link": url,
-                                "filename": "document.pdf"  # should be configurable
+                                **self.media_ref(),
+                                "filename": self.attach.split("?")[0].rsplit("/", 1)[-1] or "document.pdf"
                             }
                         }]
                     })
@@ -345,6 +339,54 @@ class WhatsAppMessage(Document):
                 data['template']['components'].extend(button_parameters)
 
         self.notify(data)
+
+    def media_ref(self):
+        """How Meta gets the attachment: `{"link": ...}` for an outside URL, `{"id": ...}` for a file kept on this
+        site. A site file is uploaded to Meta first, because Meta can't open a private file's link (it has no login)
+        and a public one only when the site is reachable from the internet."""
+        if not self.attach:
+            return {}
+        if self.attach.startswith("http"):
+            return {"link": self.attach}
+
+        import mimetypes
+
+        import requests
+
+        name = frappe.db.get_value("File", {"file_url": self.attach}, "name")
+        if not name:
+            frappe.throw(_("The attached file {0} was not found.").format(self.attach))
+        file = frappe.get_doc("File", name)
+        mime = mimetypes.guess_type(file.file_name or self.attach)[0] or "application/octet-stream"
+        if self.content_type == "image" and mime not in ("image/jpeg", "image/png"):
+            frappe.throw(_("WhatsApp accepts JPG and PNG pictures only. Send this file as a document instead."))
+        with open(file.get_full_path(), "rb") as f:
+            content = f.read()
+        limit = {"image": 5, "video": 16, "audio": 16}.get(self.content_type, 100)
+        if len(content) > limit * 1024 * 1024:
+            frappe.throw(_("This file is too large for WhatsApp ({0} MB at most).").format(limit))
+
+        account = frappe.get_doc("WhatsApp Account", self.whatsapp_account)
+        try:
+            response = requests.post(
+                f"{account.url}/{account.version}/{account.phone_id}/media",
+                headers={"authorization": f"Bearer {account.get_password('token')}"},
+                data={"messaging_product": "whatsapp", "type": mime},
+                files={"file": (file.file_name, content, mime)},
+                timeout=120,
+            )
+            result = response.json()
+        except Exception as e:
+            frappe.throw(_("Could not upload the file to WhatsApp: {0}").format(str(e)))
+        if not result.get("id"):
+            frappe.get_doc(
+                {"doctype": "WhatsApp Notification Log", "template": "Media Upload", "meta_data": result}
+            ).insert(ignore_permissions=True)
+            error = result.get("error") or {}
+            frappe.throw(
+                _("Could not upload the file to WhatsApp: {0}").format(error.get("message") or response.status_code)
+            )
+        return {"id": result["id"]}
 
     def notify(self, data):
         """Notify."""
