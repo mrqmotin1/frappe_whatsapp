@@ -206,3 +206,46 @@ def mark_read(message: str, typing: bool = False) -> bool:
     except Exception:
         frappe.log_error(title="WhatsApp mark_read failed")
         return False
+
+
+def block_number(account: str, number: str, unblock: bool = False) -> dict:
+    """Block (or unblock) a WhatsApp user on one of our numbers, so their messages no longer reach it (Meta's Block
+    Users API). Meta only blocks someone who wrote to the number in the last 24 hours. Never raises: returns
+    {"ok": bool, "error": str | None}."""
+    import requests
+
+    digits = "".join(ch for ch in str(number or "") if ch.isdigit())
+    if not digits:
+        return {"ok": False, "error": "No number"}
+    try:
+        acc = frappe.get_doc("WhatsApp Account", account)
+        version = acc.version or ""
+        try:
+            too_old = float(version.lstrip("v")) < 22  # the endpoint is newer than some configured versions
+        except ValueError:
+            too_old = True
+        if too_old:
+            version = "v22.0"
+        r = requests.request(
+            "DELETE" if unblock else "POST",
+            f"{acc.url}/{version}/{acc.phone_id}/block_users",
+            json={"messaging_product": "whatsapp", "block_users": [{"user": "+" + digits}]},
+            headers={"Authorization": f"Bearer {acc.get_password('token')}"},
+            timeout=15,
+        )
+        try:
+            data = r.json()
+        except ValueError:
+            data = {}
+        failed = (data.get("block_users") or {}).get("failed_users") or []
+        if r.ok and not failed:
+            return {"ok": True, "error": None}
+        error = None
+        if failed:
+            first = (failed[0].get("errors") or [{}])[0]
+            error = (first.get("error_data") or {}).get("details") or first.get("message")
+        error = error or (data.get("error") or {}).get("message") or f"HTTP {r.status_code}"
+        return {"ok": False, "error": str(error)[:300]}
+    except Exception:
+        frappe.log_error(title="WhatsApp block_number failed")
+        return {"ok": False, "error": "WhatsApp could not be reached"}
